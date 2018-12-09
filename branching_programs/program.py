@@ -65,95 +65,131 @@ def apply_permutation(to, values):
     values[to] = values
     return values
 
-def compose(perm1, perm2):
-    return np.arange(len(perm1))[perm2[perm1]]
 
 def compose(*argv):
     if len(argv) == 0:
         return None
     result = argv[0]
     for perm in argv[1:]:
-        result = compose(result, perm) # todo: there could be an error with order of composition
+        result = np.arange(len(result))[perm[result]]
+        # todo: there could be an error with order of composition
     return result
 
 def revert(perm):
     return np.argsort(perm)
 
-
-# ccc = np.array([3, 1, 2, 4]) - 1
-# print(revert(ccc) + 1)
-# exit()
-
-
-# from_ = np.array([3,2,1]) - 1
-# to_ = np.array([2, 1, 3]) - 1
-# values = np.array(['un', 'deux', 'trois'])
-# print(apply_permutation(from_, to_, values))
-# exit()
-
-# a = np.array([3,1,2]) - 1
-# bb = np.array([2, 1, 3]) - 1
-# print(bb[np.argsort(a)])
+def cycle_to_chain(cycle):
+    k = 0
+    result = []
+    for _ in cycle:
+        result.append(cycle[k])
+        k = cycle[k]
+    assert k == 0, 'Cycle is not actually cyclic'
+    # print('Cycle', cycle,'to chain', result)
+    return np.array(result)
 
 def change_permutation(pbp, new_cycle):
-    print(pbp)
-    print(new_cycle)
-    new_pbp = pbp
-    new_pbp[0] = new_cycle
-    gamma = new_cycle[np.argsort(pbp[0])]
+    # print('original before transform', pbp)
+    # print('new cycle', new_cycle)
+    gamma = cycle_to_chain(new_cycle)[np.argsort(cycle_to_chain(pbp[0]))]
     gamma_rev = revert(gamma)
-    print(gamma_rev)
-    new_pbp[1][0] = (new_pbp[1][0][0], compose(gamma, pbp[1][0][1]), compose(gamma, pbp[1][0][2]))
-    new_pbp[1][-1] = (new_pbp[1][-1][0], compose(pbp[1][-1][1], gamma_rev), compose(pbp[1][-1][2], gamma_rev))
-    print(gamma)
-    print(pbp)
-    print(new_pbp)
+    # print('gamma', gamma)
+    # print('gamma_rev', gamma_rev)
 
+    new_commands = pbp[1].copy()
+    new_commands[0] = (new_commands[0][0],
+        compose(gamma, new_commands[0][1]),\
+        compose(gamma, new_commands[0][2]))
+
+    new_commands[-1] = (new_commands[-1][0],
+        compose(new_commands[-1][1], gamma_rev),\
+        compose(new_commands[-1][2], gamma_rev))
+
+    new_pbp = (new_cycle, new_commands)
+
+    # print('original after transform', pbp)
+    # print('new after transform', new_pbp)
+    return new_pbp
 
 def build_var(var):
-    print(var)
+    # print(var)
     new_pbp = (WELL_KNOWN_CYCLE_A, [(var, WELL_KNOWN_CYCLE_A, IDENTITY_CYCLE)])
-    print(new_pbp)
+    # print(new_pbp)
     return new_pbp
 
 
 def build_not(pbp):
-    print(pbp)
+    # print('original before not', pbp)
     sigma = pbp[0]
     sigma_rev = revert(sigma)
     new_pbp = change_permutation(pbp, sigma_rev)
-    new_pbp[0] = sigma_rev
     new_pbp[1][-1] = (new_pbp[1][-1][0], \
         compose(pbp[1][-1][1], sigma_rev),\
         compose(pbp[1][-1][2], sigma_rev))
-    print(pbp)
-    print(new_pbp)
+    # print('original after not', pbp)
+    # print('new after not', new_pbp)
     return new_pbp
 
 
 def build_and(pbp1, pbp2):
-    print(pbp1)
-    print(pbp2)
+    # print(pbp1)
+    # print(pbp2)
     sigma = WELL_KNOWN_CYCLE_A
     tau = WELL_KNOWN_CYCLE_B
     pbp1_new = change_permutation(pbp1, sigma)
     pbp2_new = change_permutation(pbp2, tau)
 
-    print(pbp1_new)
-    print(pbp2_new)
+    # print(pbp1_new)
+    # print(pbp2_new)
 
     sigma_rev = revert(sigma)
-    tau_rev = revert(sigma)
+    tau_rev = revert(tau)
     pbp1_rev = change_permutation(pbp1_new, sigma_rev)
     pbp2_rev = change_permutation(pbp2_new, tau_rev)
 
     new_perm = compose(sigma, tau, sigma_rev, tau_rev)
     new_commands = pbp1_new[1] + pbp2_new[1] + pbp1_rev[1] + pbp2_rev[1]
-    print(new_perm)
-    print(new_commands)
+    # print(new_perm)
+    # print(new_commands)
 
     return (new_perm, new_commands)
 
+
+def build_rec(circuit, current, pbps):
+    # Caller should check if result is already calculated
+    # print(current)
+    type_ = circuit[current][0]
+    if type_ == VAR:
+        pbps[current] = build_var(current)
+    elif type_ == NOT:
+        in_ = circuit[current][1]
+        if pbps[in_] is None:
+            build_rec(circuit, in_, pbps)
+        pbps[current] = build_not(pbps[in_])
+    elif type_ == AND:
+        in1 = circuit[current][1]
+        in2 = circuit[current][2]
+        if pbps[in1] is None:
+            build_rec(circuit, in1, pbps)
+        if pbps[in2] is None:
+            build_rec(circuit, in2, pbps)
+        pbps[current] = build_and(pbps[in1], pbps[in2])
+    else:
+        assert False, 'Circuit contains OR, but it shouldn''t'
+
+def buid_pbp(circuit, output_node):
+    current = 0
+    pbps = np.empty(shape=(len(circuit),), dtype=tuple)
+    # print(pbps)
+
+    for _ in range(len(circuit)):
+        if pbps[current] is None:
+            build_rec(circuit, current, pbps)
+        current += 1
+        # print(pbps)
+
+
+    return pbps[output_node]
 
 # Tests
 
@@ -186,11 +222,28 @@ def get_input():
     return circuit
 
 
+def print_result(pbp, circuit):
+    k = 5
+    for i, cmd in enumerate(pbp[1]):
+        var_name = circuit[cmd[0]][1]
+        alpha = cmd[1]
+        beta = cmd[2]
+        for t in range(len(cmd[1])):
+            print(var_name, k + alpha[t], k + beta[t])
+        k += 5
+    output = np.array([False, True, True, True, True])
+    for x in output:
+        print(x)
+
 def run_solution():
     circuit = get_input()
-    print(circuit)
+    output_node = len(circuit) - 1
+    # print(circuit)
     circuit = replace_disjunction(circuit)
-    print(circuit)
+    # print(circuit)
+    result = buid_pbp(circuit, output_node)
+    # print('RESULT', result)
+    print_result(result, circuit)
 
 
 run_solution()
